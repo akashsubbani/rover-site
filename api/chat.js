@@ -1,6 +1,7 @@
 // Vercel serverless function: /api/chat
 // Env vars (Vercel dashboard): GEMINI_API_KEY, ROVER_ID
-const MODEL = "gemini-2.5-flash";
+// Tries each model in order if one has been retired (404).
+const MODELS = ["gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-3-flash-preview"];
 
 const SYSTEM = `You are RoverBot, the chat brain of a small wheeled rover. The user may write English, Hindi or Telugu: reply in the user's language, in at most two short sentences.
 Always answer with JSON: {"reply": string, "action": "none"|"forward"|"back"|"left"|"right"|"stop", "ms": number}.
@@ -18,23 +19,28 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: "Bad request" });
 
   try {
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": process.env.GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM }] },
-          contents,
-          generationConfig: { responseMimeType: "application/json" },
-        }),
-      }
-    );
-    const data = await r.json();
-    res.status(r.status).json(data);
+    let last = { status: 502, data: { error: "No model available" } };
+    for (const model of MODELS) {
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": process.env.GEMINI_API_KEY,
+          },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: SYSTEM }] },
+            contents,
+            generationConfig: { responseMimeType: "application/json" },
+          }),
+        }
+      );
+      const data = await r.json();
+      if (r.status !== 404) return res.status(r.status).json(data);
+      last = { status: 404, data };
+    }
+    res.status(last.status).json(last.data);
   } catch (e) {
     res.status(502).json({ error: "Gemini unreachable" });
   }
