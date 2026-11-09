@@ -45,7 +45,7 @@ small{color:var(--mute)}
 <main>
   <header class="wide">
     <h1>Rover Control</h1>
-    <span id="link" class="pill"><span class="dot"></span><span id="linkTxt">Connecting…</span></span>
+    <div class="row" style="flex:0"><button id="conn" class="primary">Connect rover</button><span id="link" class="pill"><span class="dot"></span><span id="linkTxt">Not connected</span></span></div>
   </header>
 
   <section>
@@ -53,7 +53,6 @@ small{color:var(--mute)}
     <div id="pad"><div id="knob"></div></div>
     <p style="text-align:center;margin:4px 0"><small>Last input wins: touching the stick cancels any voice move.</small></p>
     <button class="stop" id="stop">Stop</button>
-    <p class="read" id="dist" style="margin:12px 0 0">Distance: –</p>
     <small id="lastCmd">Last command: none</small>
   </section>
 
@@ -70,7 +69,7 @@ small{color:var(--mute)}
     <small id="heard" style="display:block;margin-top:8px">Say “forward”, “left”, “stop”, or ask anything.</small>
 
     <h2 style="margin-top:16px">Settings</h2>
-    <label for="rid">Rover ID (must match the firmware)</label>
+    <label for="rid">Rover ID (must match the Vercel setting)</label>
     <input id="rid" autocomplete="off" spellcheck="false">
     <label class="row" style="margin-top:10px"><input id="speak" type="checkbox" style="width:auto;flex:0"> <span>Speak replies aloud</span></label>
     <button id="save" style="margin-top:8px;width:100%">Save settings</button>
@@ -86,10 +85,8 @@ small{color:var(--mute)}
   </section>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const BROKER = "wss://broker.hivemq.com:8884/mqtt";
 const GEMINI_MODEL = "gemini-2.5-flash";
 const store = {
   get:(k,d)=>{try{return localStorage.getItem(k)??d}catch(e){return d}},
@@ -105,7 +102,7 @@ $("save").onclick = () => {
   rid = $("rid").value.trim() || rid;
   store.set("rid",rid);
   store.set("speak",$("speak").checked?"1":"0");
-  note("Settings saved. Reconnecting…"); connect();
+  note("Settings saved.");
 };
 $("lang").onchange = () => store.set("lang",$("lang").value);
 
@@ -116,25 +113,37 @@ function add(text, cls){
 }
 const note = t => add(t,"s");
 
-// ---------- MQTT link ----------
-let client=null;
+// ---------- Bluetooth link ----------
+const SVC="6e400001-b5a3-f393-e0a9-e50e24dcca9e", RX="6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+let dev=null, ch=null, busy=false;
+const enc=new TextEncoder();
 function setLink(ok,t){ $("link").classList.toggle("on",ok); $("linkTxt").textContent=t; }
-function connect(){
-  if(client){client.end(true);}
-  setLink(false,"Connecting…");
-  client = mqtt.connect(BROKER,{clientId:"web-"+Math.random().toString(16).slice(2,10),reconnectPeriod:2000});
-  client.on("connect",()=>{ setLink(true,"Broker connected"); client.subscribe(`${rid}/status`); });
-  client.on("close",()=>setLink(false,"Offline"));
-  client.on("message",(t,m)=>{
-    try{ const s=JSON.parse(m.toString());
-      if("d" in s) $("dist").textContent = "Distance: " + (s.d>0?s.d.toFixed(0)+" cm":"clear");
-      if(s.blocked) $("lastCmd").textContent="Obstacle: forward blocked";
-    }catch(e){}
-  });
+async function send(str,must){
+  if(!ch) return;
+  if(busy){ if(!must) return; await new Promise(r=>setTimeout(r,60)); }
+  busy=true;
+  try{ await ch.writeValueWithoutResponse(enc.encode(str)); }
+  catch(e){ if(must){ try{ await new Promise(r=>setTimeout(r,80)); await ch.writeValueWithoutResponse(enc.encode(str)); }catch(_){} } }
+  busy=false;
 }
-function pub(obj){
-  if(client && client.connected) client.publish(`${rid}/cmd`, JSON.stringify(obj));
+function pub(o){
+  if(o.t==="joy") send(`J,${o.x.toFixed(2)},${o.y.toFixed(2)}`,false);
+  else if(o.t==="cmd") send(`C,${o.c},${o.ms}`,true);
+  else send("S",true);
 }
+async function connectBle(){
+  if(!navigator.bluetooth){ note("Bluetooth control needs Chrome on Android or desktop (not iPhone)."); return; }
+  try{
+    setLink(false,"Pairing…");
+    dev=await navigator.bluetooth.requestDevice({filters:[{namePrefix:"Rover"}],optionalServices:[SVC]});
+    dev.addEventListener("gattserverdisconnected",()=>{ ch=null; setLink(false,"Disconnected"); note("Rover disconnected."); });
+    const srv=await dev.gatt.connect();
+    const svc=await srv.getPrimaryService(SVC);
+    ch=await svc.getCharacteristic(RX);
+    setLink(true,"Rover connected"); note("Rover connected over Bluetooth.");
+  }catch(e){ setLink(false,"Not connected"); note("Bluetooth: "+e.message); }
+}
+$("conn").onclick=connectBle;
 function runCmd(c, ms){
   pub({t:"cmd", c, ms});
   $("lastCmd").textContent = `Last command: ${c}${c==="stop"?"":" "+ms+" ms"}`;
@@ -253,8 +262,7 @@ else{
   m.addEventListener("contextmenu",e=>e.preventDefault());
 }
 
-note("Set the same Rover ID in the firmware, then drive. Voice, joystick and chat all work together.");
-connect();
+note("Tap Connect rover, choose Rover-ESP32, then drive. Voice, joystick and chat all work together.");
 </script>
 </body>
 </html>
