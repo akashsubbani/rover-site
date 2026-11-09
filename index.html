@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rover Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e6eae3;--panel:#f6f7f2;--ink:#1c2a26;--mute:#5d6b66;--line:#c9d0c6;--accent:#0f766e;--warn:#c2410c;--me:#d5ece8}
+@media (prefers-color-scheme:dark){:root{--bg:#141b18;--panel:#1d2723;--ink:#e6efe9;--mute:#98a8a0;--line:#2f3d37;--accent:#2dd4bf;--warn:#fb923c;--me:#23413c}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:'Atkinson Hyperlegible',system-ui,sans-serif;background:var(--bg);color:var(--ink);padding:env(safe-area-inset-top) 12px env(safe-area-inset-bottom)}
+main{max-width:980px;margin:0 auto;display:grid;gap:12px;padding:12px 0;grid-template-columns:1fr}
+@media(min-width:820px){main{grid-template-columns:1fr 1fr}.wide{grid-column:1/-1}}
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+h1{font-size:1.25rem;margin:0}
+h2{font-size:1rem;margin:0 0 10px}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.pill{display:inline-flex;gap:6px;align-items:center;font-size:.85rem;border:1px solid var(--line);border-radius:99px;padding:4px 10px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--warn)}
+.on .dot{background:var(--accent)}
+label{display:block;font-size:.85rem;color:var(--mute);margin:8px 0 3px}
+input,select,button{font:inherit;color:inherit}
+input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+button{cursor:pointer;border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:10px 14px}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+.stop{background:var(--warn);border-color:var(--warn);color:#fff;font-weight:700;width:100%;margin-top:10px;padding:14px}
+#pad{width:210px;height:210px;border-radius:50%;margin:6px auto;background:var(--bg);border:2px solid var(--line);position:relative;touch-action:none;user-select:none}
+#knob{width:76px;height:76px;border-radius:50%;background:var(--accent);position:absolute;left:67px;top:67px;box-shadow:0 3px 0 rgba(0,0,0,.25)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row>*{flex:1}
+#mic.live{background:var(--warn);border-color:var(--warn);color:#fff}
+#log{height:260px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding:4px 0}
+.m{max-width:86%;padding:8px 11px;border-radius:12px;border:1px solid var(--line);font-size:.95rem;white-space:pre-wrap}
+.m.u{align-self:flex-end;background:var(--me)}
+.m.s{align-self:center;color:var(--mute);border-style:dashed;font-size:.82rem}
+.read{font-size:1.5rem;font-weight:700}
+small{color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+  <header class="wide">
+    <h1>Rover Control</h1>
+    <span id="link" class="pill"><span class="dot"></span><span id="linkTxt">Connecting…</span></span>
+  </header>
+
+  <section>
+    <h2>Joystick</h2>
+    <div id="pad"><div id="knob"></div></div>
+    <p style="text-align:center;margin:4px 0"><small>Last input wins: touching the stick cancels any voice move.</small></p>
+    <button class="stop" id="stop">Stop</button>
+    <p class="read" id="dist" style="margin:12px 0 0">Distance: –</p>
+    <small id="lastCmd">Last command: none</small>
+  </section>
+
+  <section>
+    <h2>Voice</h2>
+    <div class="row">
+      <select id="lang" aria-label="Voice language">
+        <option value="en-IN">English (India)</option>
+        <option value="hi-IN">हिन्दी</option>
+        <option value="te-IN">తెలుగు</option>
+      </select>
+      <button id="mic" class="primary">Hold to talk</button>
+    </div>
+    <small id="heard" style="display:block;margin-top:8px">Say “forward”, “left”, “stop”, or ask anything.</small>
+
+    <h2 style="margin-top:16px">Settings</h2>
+    <label for="rid">Rover ID (must match the firmware)</label>
+    <input id="rid" autocomplete="off" spellcheck="false">
+    <label class="row" style="margin-top:10px"><input id="speak" type="checkbox" style="width:auto;flex:0"> <span>Speak replies aloud</span></label>
+    <button id="save" style="margin-top:8px;width:100%">Save settings</button>
+  </section>
+
+  <section class="wide">
+    <h2>Chat</h2>
+    <div id="log" aria-live="polite"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="txt" placeholder="Type here, or say “go ahead a little and turn left”" style="flex:4">
+      <button id="send" class="primary">Send</button>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+const GEMINI_MODEL = "gemini-2.5-flash";
+const store = {
+  get:(k,d)=>{try{return localStorage.getItem(k)??d}catch(e){return d}},
+  set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}
+};
+
+// ---------- settings ----------
+let rid = store.get("rid","rover-" + Math.random().toString(36).slice(2,8));
+$("rid").value = rid;
+$("speak").checked = store.get("speak","1")==="1";
+$("lang").value = store.get("lang","en-IN");
+$("save").onclick = () => {
+  rid = $("rid").value.trim() || rid;
+  store.set("rid",rid);
+  store.set("speak",$("speak").checked?"1":"0");
+  note("Settings saved. Reconnecting…"); connect();
+};
+$("lang").onchange = () => store.set("lang",$("lang").value);
+
+// ---------- chat log ----------
+function add(text, cls){
+  const d=document.createElement("div"); d.className="m "+cls; d.textContent=text;
+  $("log").appendChild(d); $("log").scrollTop=$("log").scrollHeight;
+}
+const note = t => add(t,"s");
+
+// ---------- MQTT link ----------
+let client=null;
+function setLink(ok,t){ $("link").classList.toggle("on",ok); $("linkTxt").textContent=t; }
+function connect(){
+  if(client){client.end(true);}
+  setLink(false,"Connecting…");
+  client = mqtt.connect(BROKER,{clientId:"web-"+Math.random().toString(16).slice(2,10),reconnectPeriod:2000});
+  client.on("connect",()=>{ setLink(true,"Broker connected"); client.subscribe(`${rid}/status`); });
+  client.on("close",()=>setLink(false,"Offline"));
+  client.on("message",(t,m)=>{
+    try{ const s=JSON.parse(m.toString());
+      if("d" in s) $("dist").textContent = "Distance: " + (s.d>0?s.d.toFixed(0)+" cm":"clear");
+      if(s.blocked) $("lastCmd").textContent="Obstacle: forward blocked";
+    }catch(e){}
+  });
+}
+function pub(obj){
+  if(client && client.connected) client.publish(`${rid}/cmd`, JSON.stringify(obj));
+}
+function runCmd(c, ms){
+  pub({t:"cmd", c, ms});
+  $("lastCmd").textContent = `Last command: ${c}${c==="stop"?"":" "+ms+" ms"}`;
+}
+
+// ---------- joystick ----------
+const pad=$("pad"), knob=$("knob");
+let active=false, jx=0, jy=0, timer=null;
+function setKnob(dx,dy){ knob.style.transform=`translate(${dx}px,${dy}px)`; }
+function move(e){
+  const r=pad.getBoundingClientRect(), R=r.width/2-38;
+  let dx=e.clientX-(r.left+r.width/2), dy=e.clientY-(r.top+r.height/2);
+  const len=Math.hypot(dx,dy); if(len>R){dx*=R/len; dy*=R/len;}
+  setKnob(dx,dy); jx=dx/R; jy=-dy/R;
+}
+pad.addEventListener("pointerdown",e=>{
+  active=true; pad.setPointerCapture(e.pointerId); move(e);
+  if(!timer) timer=setInterval(()=>pub({t:"joy",x:+jx.toFixed(2),y:+jy.toFixed(2)}),100);
+});
+pad.addEventListener("pointermove",e=>{ if(active) move(e); });
+function release(){
+  active=false; jx=jy=0; setKnob(0,0);
+  clearInterval(timer); timer=null; pub({t:"stop"});
+}
+pad.addEventListener("pointerup",release);
+pad.addEventListener("pointercancel",release);
+$("stop").onclick=()=>{ pub({t:"stop"}); $("lastCmd").textContent="Last command: stop"; };
+
+// ---------- local voice commands (no AI needed) ----------
+const WORDS = {
+  stop:["stop","halt","ruko","ruk","रुको","रुक","ఆపు","ఆగు"],
+  left:["left","baayein","bayen","बाएं","बायें","ఎడమ"],
+  right:["right","daayein","dayen","दाएं","दायें","కుడి"],
+  forward:["forward","ahead","straight","aage","आगे","ముందుకు","ముందు"],
+  back:["back","reverse","peeche","पीछे","వెనక్కి","వెనుక"]
+};
+function localCmd(text){
+  const t=text.toLowerCase(); if(t.split(/\s+/).length>4) return null;
+  for(const c of ["stop","left","right","forward","back"])
+    if(WORDS[c].some(w=>t.includes(w))) return c;
+  return null;
+}
+const MS = {forward:1200,back:1000,left:450,right:450,stop:0};
+
+// ---------- Gemini chat + smart commands ----------
+let history=[];
+async function askGemini(text){
+  history.push({role:"user",parts:[{text}]}); history=history.slice(-10);
+  try{
+    const r=await fetch("/api/chat",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({contents:history,rid})
+    });
+    if(r.status===401) throw new Error("Rover ID doesn't match the server");
+    if(!r.ok) throw new Error("Chat error "+r.status);
+    const j=await r.json();
+    const out=JSON.parse(j.candidates[0].content.parts[0].text);
+    history.push({role:"model",parts:[{text:JSON.stringify(out)}]});
+    return out;
+  }catch(e){
+    history.pop();
+    return {reply:"Chat failed: "+e.message+". Basic voice commands still work.",action:"none",ms:0};
+  }
+}
+
+function say(text){
+  if(!$("speak").checked || !window.speechSynthesis) return;
+  const u=new SpeechSynthesisUtterance(text); u.lang=$("lang").value;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+
+async function handle(text){
+  text=text.trim(); if(!text) return;
+  add(text,"u");
+  const c=localCmd(text);
+  if(c){ runCmd(c,MS[c]); note(c==="stop"?"Stopped.":`Moving ${c}.`); return; }
+  const out=await askGemini(text);
+  add(out.reply||"…","b");
+  say(out.reply||"");
+  const a=out.action;
+  if(a && a!=="none" && MS[a]!==undefined){
+    runCmd(a, a==="stop"?0:Math.min(3000,Math.max(300,+out.ms||MS[a])));
+  }
+}
+$("send").onclick=()=>{ handle($("txt").value); $("txt").value=""; };
+$("txt").addEventListener("keydown",e=>{ if(e.key==="Enter"){ $("send").click(); } });
+
+// ---------- microphone ----------
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null;
+if(!SR){ $("mic").disabled=true; $("heard").textContent="Voice input needs Chrome or Edge over HTTPS."; }
+else{
+  const start=()=>{
+    if(rec) return;
+    rec=new SR(); rec.lang=$("lang").value; rec.interimResults=true; rec.maxAlternatives=1;
+    $("mic").classList.add("live"); $("mic").textContent="Listening…";
+    let finalText="";
+    rec.onresult=e=>{
+      let s=""; for(const r of e.results){ s+=r[0].transcript; }
+      finalText=s;
+      $("heard").textContent="Heard: "+s;
+    };
+    rec.onerror=e=>{ $("heard").textContent="Mic error: "+e.error; };
+    rec.onend=()=>{
+      $("mic").classList.remove("live"); $("mic").textContent="Hold to talk";
+      rec=null; if(finalText) handle(finalText);
+    };
+    try{ rec.start(); }catch(e){ rec=null; }
+  };
+  const stop=()=>{ if(rec) rec.stop(); };
+  const m=$("mic");
+  m.addEventListener("pointerdown",e=>{ e.preventDefault(); start(); });
+  m.addEventListener("pointerup",stop);
+  m.addEventListener("pointerleave",stop);
+  m.addEventListener("contextmenu",e=>e.preventDefault());
+}
+
+note("Set the same Rover ID in the firmware, then drive. Voice, joystick and chat all work together.");
+connect();
+</script>
+</body>
+</html>
